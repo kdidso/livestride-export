@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>LiveStride – Find My Run</title>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; }
+    table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+    th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+    th { background-color: #f0f0f0; }
+    .stale { background-color: #ffe5e5; }
+    button { padding: 4px 10px; margin-right: 6px; }
+    #searchInput {
+      padding: 8px;
+      font-size: 16px;
+      width: 250px;
+    }
+  </style>
+</head>
+<body>
+
+<h2>Find My Run</h2>
+<input type="text" id="searchInput" placeholder="Search your name or ID">
+
+<p>Runners with a <code>timestamp</code> older than 30 minutes are highlighted.</p>
+
+<table id="runnerTable">
+  <thead>
+    <tr>
+      <th>Runner ID</th>
+      <th>Name</th>
+      <th>Stop Time</th>
+      <th>Minutes Ago</th>
+      <th>Actions</th>
+    </tr>
+  </thead>
+  <tbody></tbody>
+</table>
+
+<script>
+  const firebaseConfig = {
+    apiKey: "AIzaSyCHJAjNTplm3eDjAjolmW6U7iPYY0aIWxk",
+    authDomain: "livestride.firebaseapp.com",
+    databaseURL: "https://livestride-default-rtdb.firebaseio.com",
+    projectId: "livestride",
+    storageBucket: "livestride.firebasestorage.app",
+    messagingSenderId: "758438288478",
+    appId: "1:758438288478:web:def85c1fd5e08b6c2ee8cf"
+  };
+
+  firebase.initializeApp(firebaseConfig);
+  const db = firebase.database();
+
+  let allRunners = [];
+
+  function loadRunners() {
+    db.ref("runners").once("value").then(snapshot => {
+      const now = Date.now();
+      allRunners = [];
+
+      snapshot.forEach(child => {
+        const runnerId = child.key;
+        const data = child.val();
+
+        const name = data.name || data.current?.name || "";
+        const timestamp = data.timestamp || null;
+        const path = data.path || [];
+
+        let minutesAgo = "";
+        let isStale = false;
+
+        if (timestamp) {
+          const diff = Math.floor((now - timestamp) / 60000);
+          minutesAgo = diff;
+          if (diff > 30) isStale = true;
+        }
+
+        allRunners.push({
+          runnerId, name, timestamp, minutesAgo, isStale, path
+        });
+      });
+
+      renderTable(allRunners);
+    });
+  }
+
+  function renderTable(runners) {
+    const tableBody = document.querySelector("#runnerTable tbody");
+    tableBody.innerHTML = "";
+
+    runners.forEach(({ runnerId, name, timestamp, minutesAgo, isStale, path }) => {
+      const row = document.createElement("tr");
+      if (isStale) row.classList.add("stale");
+
+      row.innerHTML = `
+        <td>${runnerId}</td>
+        <td>${name}</td>
+        <td>${timestamp ? new Date(timestamp).toLocaleString() : "N/A"}</td>
+        <td>${timestamp ? minutesAgo : "N/A"}</td>
+        <td>
+          <button onclick='downloadGPX(${JSON.stringify(path)}, "${name}", ${timestamp})'>Convert to GPX</button>
+          <button onclick='uploadToStrava()'>Upload to Strava</button>
+        </td>
+      `;
+
+      tableBody.appendChild(row);
+    });
+  }
+
+  function downloadGPX(pathCoords, name, startTime) {
+    if (!pathCoords || pathCoords.length === 0) {
+      alert("No run data to export.");
+      return;
+    }
+
+    const dateStr = new Date(startTime).toISOString().slice(0, 10);
+    const trackName = name
+      ? `${name} – ${dateStr}`
+      : `LiveStride Run ${dateStr}`;
+
+    let gpx = `<?xml version="1.0" encoding="UTF-8"?>\n`;
+    gpx += `<gpx creator="LiveStride" version="1.1" xmlns="http://www.topografix.com/GPX/1/1">\n`;
+    gpx += `<trk>\n<name>${trackName}</name>\n<trkseg>\n`;
+
+    pathCoords.forEach(pt => {
+      const ele = pt.elevation != null ? pt.elevation : 0;
+      gpx += `  <trkpt lat="${pt.lat}" lon="${pt.lon}">\n`;
+      gpx += `    <ele>${ele}</ele>\n`;
+      gpx += `    <time>${pt.time}</time>\n`;
+      gpx += `  </trkpt>\n`;
+    });
+
+    gpx += `</trkseg>\n</trk>\n</gpx>`;
+
+    const blob = new Blob([gpx], { type: "application/gpx+xml" });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement("a");
+    a.href     = url;
+    a.download = `LiveStride_${dateStr}.gpx`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function uploadToStrava() {
+    window.open("https://www.strava.com/upload/select", "_blank");
+  }
+
+  document.getElementById("searchInput").addEventListener("input", () => {
+    const query = document.getElementById("searchInput").value.toLowerCase();
+    const filtered = allRunners.filter(r =>
+      r.name.toLowerCase().includes(query) ||
+      r.runnerId.toLowerCase().includes(query)
+    );
+    renderTable(filtered);
+  });
+
+  loadRunners();
+</script>
+
+</body>
+</html>
