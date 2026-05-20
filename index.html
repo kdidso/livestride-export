@@ -83,39 +83,41 @@
     return Math.floor((Date.now() - new Date(value).getTime()) / 60000);
   }
 
-  async function loadRuns() {
-    setStatus("Loading runs...");
+async function loadRuns() {
+  setStatus("Loading finished runs...");
 
-    const { data, error } = await supabaseClient
-      .from(RUNS_TABLE)
-      .select("id, runner_name, started_at, finished_at, is_live")
-      .order("started_at", { ascending: false });
+  const { data, error } = await supabaseClient
+    .from(RUNS_TABLE)
+    .select("id, runner_name, started_at, finished_at, is_live, total_distance_m, latest_lat, latest_lon")
+    .not("finished_at", "is", null)
+    .order("finished_at", { ascending: false });
 
-    if (error) {
-      console.error(error);
-      setStatus("Failed to load runs from Supabase.");
-      return;
-    }
-
-    allRuns = (data || []).map(run => {
-      const stopTime = run.finished_at || null;
-      const minsAgo = stopTime ? minutesSince(stopTime) : "";
-      const isStale = stopTime && minsAgo > 30;
-
-      return {
-        id: run.id,
-        runner_name: run.runner_name || "",
-        started_at: run.started_at || null,
-        finished_at: run.finished_at || null,
-        is_live: run.is_live,
-        minutesAgo: minsAgo,
-        isStale
-      };
-    });
-
-    renderTable(allRuns);
-    setStatus(`Loaded ${allRuns.length} runs.`);
+  if (error) {
+    console.error(error);
+    setStatus("Failed to load finished runs from Supabase.");
+    return;
   }
+
+  allRuns = (data || []).map(run => {
+    const minsAgo = minutesSince(run.finished_at);
+
+    return {
+      id: run.id,
+      runner_name: run.runner_name || "",
+      started_at: run.started_at || null,
+      finished_at: run.finished_at || null,
+      is_live: run.is_live,
+      total_distance_m: run.total_distance_m,
+      latest_lat: run.latest_lat,
+      latest_lon: run.latest_lon,
+      minutesAgo: minsAgo,
+      isStale: minsAgo > 30
+    };
+  });
+
+  renderTable(allRuns);
+  setStatus(`Loaded ${allRuns.length} finished runs.`);
+}
 
   function renderTable(runs) {
     const tableBody = document.querySelector("#runnerTable tbody");
@@ -143,35 +145,36 @@
     });
   }
 
-  async function fetchAllNativePoints(runId) {
-    let allPoints = [];
-    let from = 0;
+async function fetchAllNativePoints(run) {
+  let allPoints = [];
+  let from = 0;
 
-    while (true) {
-      const to = from + POINT_BATCH_SIZE - 1;
+  while (true) {
+    const to = from + POINT_BATCH_SIZE - 1;
 
-      const { data, error } = await supabaseClient
-        .from(POINTS_TABLE)
-        .select("*")
-        .eq("run_id", runId)
-        .order("sequence_num", { ascending: true })
-        .range(from, to);
+    const { data, error } = await supabaseClient
+      .from(POINTS_TABLE)
+      .select("*")
+      .eq("run_id", run.id)
+      .eq("runner_name", run.runner_name)
+      .order("sequence_num", { ascending: true })
+      .range(from, to);
 
-      if (error) {
-        console.error(error);
-        throw new Error("Failed to fetch run points from Supabase.");
-      }
-
-      const batch = data || [];
-      allPoints = allPoints.concat(batch);
-
-      if (batch.length < POINT_BATCH_SIZE) break;
-
-      from += POINT_BATCH_SIZE;
+    if (error) {
+      console.error(error);
+      throw new Error("Failed to fetch run points from Supabase.");
     }
 
-    return allPoints;
+    const batch = data || [];
+    allPoints = allPoints.concat(batch);
+
+    if (batch.length < POINT_BATCH_SIZE) break;
+
+    from += POINT_BATCH_SIZE;
   }
+
+  return allPoints;
+}
 
   function getPointLat(pt) {
     return pt.lat ?? pt.latitude;
@@ -206,7 +209,7 @@
     try {
       setStatus(`Fetching native points for ${run.runner_name || run.id}...`);
 
-      const points = await fetchAllNativePoints(run.id);
+      const points = await fetchAllNativePoints(run);
 
       if (!points || points.length === 0) {
         alert("No native Supabase points found for this run.");
