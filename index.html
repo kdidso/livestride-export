@@ -92,11 +92,11 @@ async function loadRuns() {
     .not("finished_at", "is", null)
     .order("finished_at", { ascending: false });
 
-  if (error) {
-    console.error(error);
-    setStatus("Failed to load finished runs from Supabase.");
-    return;
-  }
+if (error) {
+  console.error("Supabase runs error:", error);
+  setStatus(`Failed to load runs: ${error.message}`);
+  return;
+}
 
   allRuns = (data || []).map(run => {
     const minsAgo = minutesSince(run.finished_at);
