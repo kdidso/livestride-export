@@ -2,8 +2,9 @@
 <html>
 <head>
   <title>LiveStride – Find My Run</title>
-  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
   <style>
     body { font-family: Arial, sans-serif; padding: 20px; }
     table { border-collapse: collapse; width: 100%; margin-top: 20px; }
@@ -16,20 +17,29 @@
       font-size: 16px;
       width: 250px;
     }
+    #status {
+      margin-top: 12px;
+      font-weight: bold;
+    }
   </style>
 </head>
+
 <body>
 
 <h2>Find My Run</h2>
-<input type="text" id="searchInput" placeholder="Search your name or ID">
 
-<p>Runners with a <code>timestamp</code> older than 30 minutes are highlighted.</p>
+<input type="text" id="searchInput" placeholder="Search your name or run ID">
+
+<p>Runs with a <code>finished_at</code> older than 30 minutes are highlighted.</p>
+
+<div id="status"></div>
 
 <table id="runnerTable">
   <thead>
     <tr>
-      <th>Runner ID</th>
+      <th>Run ID</th>
       <th>Name</th>
+      <th>Start Time</th>
       <th>Stop Time</th>
       <th>Minutes Ago</th>
       <th>Actions</th>
@@ -39,68 +49,93 @@
 </table>
 
 <script>
-  const firebaseConfig = {
-    apiKey: "AIzaSyCHJAjNTplm3eDjAjolmW6U7iPYY0aIWxk",
-    authDomain: "livestride.firebaseapp.com",
-    databaseURL: "https://livestride-default-rtdb.firebaseio.com",
-    projectId: "livestride",
-    storageBucket: "livestride.firebasestorage.app",
-    messagingSenderId: "758438288478",
-    appId: "1:758438288478:web:def85c1fd5e08b6c2ee8cf"
-  };
+  const SUPABASE_URL = "https://liczyibicdyvlpfiwyhc.supabase.co"";
+  const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxpY3p5aWJpY2R5dmxwZml3eWhjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc0MDc5MTgsImV4cCI6MjA5Mjk4MzkxOH0.A3EV_DV9kGR5F0iKAzq8f1ZewETDMkfbN0p8hCit0rQ";
 
-  firebase.initializeApp(firebaseConfig);
-  const db = firebase.database();
+  const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-  let allRunners = [];
+  const RUNS_TABLE = "runs";
+  const POINTS_TABLE = "run_points_native_test";
+  const POINT_BATCH_SIZE = 1000;
 
-  function loadRunners() {
-    db.ref("runners").once("value").then(snapshot => {
-      const now = Date.now();
-      allRunners = [];
+  let allRuns = [];
 
-      snapshot.forEach(child => {
-        const runnerId = child.key;
-        const data = child.val();
-
-        const name = data.name || data.current?.name || "";
-        const timestamp = data.timestamp || null;
-        const path = data.path || [];
-
-        let minutesAgo = "";
-        let isStale = false;
-
-        if (timestamp) {
-          const diff = Math.floor((now - timestamp) / 60000);
-          minutesAgo = diff;
-          if (diff > 30) isStale = true;
-        }
-
-        allRunners.push({
-          runnerId, name, timestamp, minutesAgo, isStale, path
-        });
-      });
-
-      renderTable(allRunners);
-    });
+  function setStatus(message) {
+    document.getElementById("status").textContent = message || "";
   }
 
-  function renderTable(runners) {
+  function escapeXml(value) {
+    return String(value ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&apos;");
+  }
+
+  function formatDateTime(value) {
+    if (!value) return "N/A";
+    return new Date(value).toLocaleString();
+  }
+
+  function minutesSince(value) {
+    if (!value) return "";
+    return Math.floor((Date.now() - new Date(value).getTime()) / 60000);
+  }
+
+  async function loadRuns() {
+    setStatus("Loading runs...");
+
+    const { data, error } = await supabaseClient
+      .from(RUNS_TABLE)
+      .select("id, runner_name, started_at, finished_at, is_live")
+      .order("started_at", { ascending: false });
+
+    if (error) {
+      console.error(error);
+      setStatus("Failed to load runs from Supabase.");
+      return;
+    }
+
+    allRuns = (data || []).map(run => {
+      const stopTime = run.finished_at || null;
+      const minsAgo = stopTime ? minutesSince(stopTime) : "";
+      const isStale = stopTime && minsAgo > 30;
+
+      return {
+        id: run.id,
+        runner_name: run.runner_name || "",
+        started_at: run.started_at || null,
+        finished_at: run.finished_at || null,
+        is_live: run.is_live,
+        minutesAgo: minsAgo,
+        isStale
+      };
+    });
+
+    renderTable(allRuns);
+    setStatus(`Loaded ${allRuns.length} runs.`);
+  }
+
+  function renderTable(runs) {
     const tableBody = document.querySelector("#runnerTable tbody");
     tableBody.innerHTML = "";
 
-    runners.forEach(({ runnerId, name, timestamp, minutesAgo, isStale, path }) => {
+    runs.forEach(run => {
       const row = document.createElement("tr");
-      if (isStale) row.classList.add("stale");
+      if (run.isStale) row.classList.add("stale");
+
+      const safeRun = encodeURIComponent(JSON.stringify(run));
 
       row.innerHTML = `
-        <td>${runnerId}</td>
-        <td>${name}</td>
-        <td>${timestamp ? new Date(timestamp).toLocaleString() : "N/A"}</td>
-        <td>${timestamp ? minutesAgo : "N/A"}</td>
+        <td>${escapeXml(run.id)}</td>
+        <td>${escapeXml(run.runner_name)}</td>
+        <td>${formatDateTime(run.started_at)}</td>
+        <td>${formatDateTime(run.finished_at)}</td>
+        <td>${run.finished_at ? run.minutesAgo : "N/A"}</td>
         <td>
-          <button onclick='downloadGPX(${JSON.stringify(path)}, "${name}", ${timestamp})'>Convert to GPX</button>
-          <button onclick='uploadToStrava()'>Upload to Strava</button>
+          <button onclick="downloadGPXFromSupabase('${safeRun}')">Convert to GPX</button>
+          <button onclick="uploadToStrava()">Upload to Strava</button>
         </td>
       `;
 
@@ -108,38 +143,139 @@
     });
   }
 
-  function downloadGPX(pathCoords, name, startTime) {
-    if (!pathCoords || pathCoords.length === 0) {
-      alert("No run data to export.");
-      return;
+  async function fetchAllNativePoints(runId) {
+    let allPoints = [];
+    let from = 0;
+
+    while (true) {
+      const to = from + POINT_BATCH_SIZE - 1;
+
+      const { data, error } = await supabaseClient
+        .from(POINTS_TABLE)
+        .select("*")
+        .eq("run_id", runId)
+        .order("sequence_num", { ascending: true })
+        .range(from, to);
+
+      if (error) {
+        console.error(error);
+        throw new Error("Failed to fetch run points from Supabase.");
+      }
+
+      const batch = data || [];
+      allPoints = allPoints.concat(batch);
+
+      if (batch.length < POINT_BATCH_SIZE) break;
+
+      from += POINT_BATCH_SIZE;
     }
 
-    const dateStr = new Date(startTime).toISOString().slice(0, 10);
-    const trackName = name
-      ? `${name} – ${dateStr}`
-      : `LiveStride Run ${dateStr}`;
+    return allPoints;
+  }
 
-    let gpx = `<?xml version="1.0" encoding="UTF-8"?>\n`;
-    gpx += `<gpx creator="LiveStride" version="1.1" xmlns="http://www.topografix.com/GPX/1/1">\n`;
-    gpx += `<trk>\n<name>${trackName}</name>\n<trkseg>\n`;
+  function getPointLat(pt) {
+    return pt.lat ?? pt.latitude;
+  }
 
-    pathCoords.forEach(pt => {
-      const ele = pt.elevation != null ? pt.elevation : 0;
-      gpx += `  <trkpt lat="${pt.lat}" lon="${pt.lon}">\n`;
-      gpx += `    <ele>${ele}</ele>\n`;
-      gpx += `    <time>${pt.time}</time>\n`;
-      gpx += `  </trkpt>\n`;
-    });
+  function getPointLon(pt) {
+    return pt.lon ?? pt.lng ?? pt.longitude;
+  }
 
-    gpx += `</trkseg>\n</trk>\n</gpx>`;
+  function getPointElevationMeters(pt) {
+    if (pt.elevation_m != null) return pt.elevation_m;
+    if (pt.elevation != null) return pt.elevation;
+    if (pt.elevationFt != null) return pt.elevationFt / 3.28084;
+    if (pt.elevation_ft != null) return pt.elevation_ft / 3.28084;
+    return 0;
+  }
 
-    const blob = new Blob([gpx], { type: "application/gpx+xml" });
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement("a");
-    a.href     = url;
-    a.download = `LiveStride_${dateStr}.gpx`;
-    a.click();
-    URL.revokeObjectURL(url);
+  function getPointTime(pt, fallbackTime) {
+    return (
+      pt.recorded_at ||
+      pt.timestamp ||
+      pt.created_at ||
+      pt.time ||
+      fallbackTime ||
+      new Date().toISOString()
+    );
+  }
+
+  async function downloadGPXFromSupabase(encodedRun) {
+    const run = JSON.parse(decodeURIComponent(encodedRun));
+
+    try {
+      setStatus(`Fetching native points for ${run.runner_name || run.id}...`);
+
+      const points = await fetchAllNativePoints(run.id);
+
+      if (!points || points.length === 0) {
+        alert("No native Supabase points found for this run.");
+        setStatus("");
+        return;
+      }
+
+      const validPoints = points.filter(pt => {
+        const lat = getPointLat(pt);
+        const lon = getPointLon(pt);
+        return lat != null && lon != null;
+      });
+
+      if (validPoints.length === 0) {
+        alert("Points were found, but none had usable latitude/longitude values.");
+        setStatus("");
+        return;
+      }
+
+      const startDate = run.started_at || validPoints[0].recorded_at || validPoints[0].created_at || new Date().toISOString();
+      const dateStr = new Date(startDate).toISOString().slice(0, 10);
+
+      const trackName = run.runner_name
+        ? `${run.runner_name} – ${dateStr}`
+        : `LiveStride Run ${dateStr}`;
+
+      let gpx = `<?xml version="1.0" encoding="UTF-8"?>\n`;
+      gpx += `<gpx creator="LiveStride" version="1.1" xmlns="http://www.topografix.com/GPX/1/1">\n`;
+      gpx += `<trk>\n`;
+      gpx += `<name>${escapeXml(trackName)}</name>\n`;
+      gpx += `<trkseg>\n`;
+
+      validPoints.forEach(pt => {
+        const lat = getPointLat(pt);
+        const lon = getPointLon(pt);
+        const ele = getPointElevationMeters(pt);
+        const time = getPointTime(pt, run.started_at);
+
+        gpx += `  <trkpt lat="${lat}" lon="${lon}">\n`;
+        gpx += `    <ele>${ele}</ele>\n`;
+        gpx += `    <time>${new Date(time).toISOString()}</time>\n`;
+        gpx += `  </trkpt>\n`;
+      });
+
+      gpx += `</trkseg>\n`;
+      gpx += `</trk>\n`;
+      gpx += `</gpx>`;
+
+      const blob = new Blob([gpx], { type: "application/gpx+xml" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+
+      const safeName = (run.runner_name || "LiveStride")
+        .replace(/[^a-z0-9_-]+/gi, "_")
+        .replace(/^_+|_+$/g, "");
+
+      a.href = url;
+      a.download = `${safeName}_${dateStr}.gpx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      setStatus(`Downloaded GPX with ${validPoints.length} points.`);
+    } catch (err) {
+      console.error(err);
+      alert(err.message || "Failed to create GPX file.");
+      setStatus("Failed to create GPX file.");
+    }
   }
 
   function uploadToStrava() {
@@ -148,14 +284,16 @@
 
   document.getElementById("searchInput").addEventListener("input", () => {
     const query = document.getElementById("searchInput").value.toLowerCase();
-    const filtered = allRunners.filter(r =>
-      r.name.toLowerCase().includes(query) ||
-      r.runnerId.toLowerCase().includes(query)
+
+    const filtered = allRuns.filter(run =>
+      String(run.runner_name || "").toLowerCase().includes(query) ||
+      String(run.id || "").toLowerCase().includes(query)
     );
+
     renderTable(filtered);
   });
 
-  loadRunners();
+  loadRuns();
 </script>
 
 </body>
