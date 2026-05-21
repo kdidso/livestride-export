@@ -57,6 +57,7 @@
   const RUNS_TABLE = "runs";
   const POINTS_TABLE = "run_points_native_test";
   const POINT_BATCH_SIZE = 1000;
+  const ELEVATION_LOOKUP_URL = "https://elevation.livestride.run/api/v1/lookup";
 
   let allRuns = [];
 
@@ -184,13 +185,31 @@ async function fetchAllNativePoints(run) {
     return pt.lon ?? pt.lng ?? pt.longitude;
   }
 
-  function getPointElevationMeters(pt) {
-    if (pt.elevation_m != null) return pt.elevation_m;
-    if (pt.elevation != null) return pt.elevation;
-    if (pt.elevationFt != null) return pt.elevationFt / 3.28084;
-    if (pt.elevation_ft != null) return pt.elevation_ft / 3.28084;
-    return 0;
+function getExistingPointElevationMeters(pt) {
+  if (pt.elevation_m != null) return Number(pt.elevation_m);
+  if (pt.elevation != null) return Number(pt.elevation);
+  if (pt.elevationFt != null) return Number(pt.elevationFt) / 3.28084;
+  if (pt.elevation_ft != null) return Number(pt.elevation_ft) / 3.28084;
+  return null;
+}
+
+async function fetchElevationMeters(lat, lon) {
+  const url = `${ELEVATION_LOOKUP_URL}?locations=${lat},${lon}`;
+
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Elevation lookup failed: ${response.status}`);
   }
+
+  const json = await response.json();
+  const elevation = json?.results?.[0]?.elevation;
+
+  if (elevation == null || Number.isNaN(Number(elevation))) {
+    throw new Error("Elevation server did not return a usable elevation.");
+  }
+
+  return Number(elevation);
+}
 
   function getPointTime(pt, fallbackTime) {
     return (
@@ -242,21 +261,43 @@ async function fetchAllNativePoints(run) {
       gpx += `<name>${escapeXml(trackName)}</name>\n`;
       gpx += `<trkseg>\n`;
 
-      validPoints.forEach(pt => {
-        const lat = getPointLat(pt);
-        const lon = getPointLon(pt);
-        const ele = getPointElevationMeters(pt);
-        const time = getPointTime(pt, run.started_at);
+for (let i = 0; i < validPoints.length; i++) {
+  const pt = validPoints[i];
 
-        gpx += `  <trkpt lat="${lat}" lon="${lon}">\n`;
-        gpx += `    <ele>${ele}</ele>\n`;
-        gpx += `    <time>${new Date(time).toISOString()}</time>\n`;
-        gpx += `  </trkpt>\n`;
-      });
+  const lat = getPointLat(pt);
+  const lon = getPointLon(pt);
 
-      gpx += `</trkseg>\n`;
-      gpx += `</trk>\n`;
-      gpx += `</gpx>`;
+  let ele = getExistingPointElevationMeters(pt);
+
+  const time = getPointTime(pt, run.started_at);
+
+  if (ele == null) {
+    setStatus(`Fetching missing elevation ${i + 1} of ${validPoints.length}...`);
+
+    try {
+      ele = await fetchElevationMeters(lat, lon);
+    } catch (err) {
+      console.error("Elevation fetch failed:", err);
+
+      // omit <ele> if lookup fails
+      ele = null;
+    }
+  }
+
+  gpx += `  <trkpt lat="${lat}" lon="${lon}">\n`;
+
+  if (ele != null) {
+    gpx += `    <ele>${ele}</ele>\n`;
+  }
+
+  gpx += `    <time>${new Date(time).toISOString()}</time>\n`;
+  gpx += `  </trkpt>\n`;
+}
+
+// THESE MUST BE AFTER THE LOOP
+gpx += `</trkseg>\n`;
+gpx += `</trk>\n`;
+gpx += `</gpx>`;
 
       const blob = new Blob([gpx], { type: "application/gpx+xml" });
       const url = URL.createObjectURL(blob);
