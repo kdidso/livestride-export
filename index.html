@@ -146,6 +146,27 @@ if (error) {
     });
   }
 
+function refreshMinutesAgoColumn() {
+  allRuns = allRuns.map(run => {
+    const minsAgo = run.finished_at ? minutesSince(run.finished_at) : "";
+
+    return {
+      ...run,
+      minutesAgo: minsAgo,
+      isStale: run.finished_at ? minsAgo > 30 : false
+    };
+  });
+
+  const query = document.getElementById("searchInput").value.toLowerCase();
+
+  const filtered = allRuns.filter(run =>
+    String(run.runner_name || "").toLowerCase().includes(query) ||
+    String(run.id || "").toLowerCase().includes(query)
+  );
+
+  renderTable(filtered);
+}
+
 async function fetchAllNativePoints(run) {
   let allPoints = [];
   let from = 0;
@@ -338,6 +359,7 @@ gpx += `</gpx>`;
   });
 
   loadRuns();
+  setInterval(refreshMinutesAgoColumn, 60000);
 </script>
 
 </body>
