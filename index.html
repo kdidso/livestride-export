@@ -65,6 +65,64 @@
     document.getElementById("status").textContent = message || "";
   }
 
+  function isEmbeddedInLiveStride() {
+    return window.parent && window.parent !== window;
+  }
+
+  function requestAppGpxSave(filename, content) {
+    return new Promise((resolve, reject) => {
+      const requestId = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      const timeoutId = window.setTimeout(() => {
+        window.removeEventListener("message", onMessage);
+        reject(new Error("LiveStride did not confirm the GPX save."));
+      }, 15000);
+
+      function onMessage(event) {
+        const data = event.data || {};
+        if (
+          data.source !== "livestride-app" ||
+          data.type !== "saveGpxResult" ||
+          data.requestId !== requestId
+        ) {
+          return;
+        }
+
+        window.clearTimeout(timeoutId);
+        window.removeEventListener("message", onMessage);
+
+        if (data.ok) {
+          resolve(data);
+        } else {
+          reject(new Error(data.message || "LiveStride could not save the GPX file."));
+        }
+      }
+
+      window.addEventListener("message", onMessage);
+      window.parent.postMessage(
+        {
+          source: "livestride-export",
+          type: "saveGpx",
+          requestId,
+          filename,
+          content
+        },
+        "*"
+      );
+    });
+  }
+
+  function downloadGpxInBrowser(filename, content) {
+    const blob = new Blob([content], { type: "application/gpx+xml" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
   function escapeXml(value) {
     return String(value ?? "")
       .replaceAll("&", "&amp;")
@@ -320,22 +378,20 @@ gpx += `</trkseg>\n`;
 gpx += `</trk>\n`;
 gpx += `</gpx>`;
 
-      const blob = new Blob([gpx], { type: "application/gpx+xml" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-
       const safeName = (run.runner_name || "LiveStride")
         .replace(/[^a-z0-9_-]+/gi, "_")
         .replace(/^_+|_+$/g, "");
 
-      a.href = url;
-      a.download = `${safeName}_${dateStr}.gpx`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      const filename = `${safeName}_${dateStr}.gpx`;
 
-      setStatus(`Downloaded GPX with ${validPoints.length} points.`);
+      if (isEmbeddedInLiveStride()) {
+        setStatus(`Saving ${filename} to Downloads...`);
+        await requestAppGpxSave(filename, gpx);
+        setStatus(`Saved ${filename} to Downloads with ${validPoints.length} points.`);
+      } else {
+        downloadGpxInBrowser(filename, gpx);
+        setStatus(`Downloaded GPX with ${validPoints.length} points.`);
+      }
     } catch (err) {
       console.error(err);
       alert(err.message || "Failed to create GPX file.");
@@ -344,7 +400,18 @@ gpx += `</gpx>`;
   }
 
   function uploadToStrava() {
-    window.open("https://www.strava.com/upload/select", "_blank");
+    if (isEmbeddedInLiveStride()) {
+      window.parent.postMessage(
+        {
+          source: "livestride-export",
+          type: "openInPanel",
+          url: "https://www.strava.com/upload/select"
+        },
+        "*"
+      );
+    } else {
+      window.open("https://www.strava.com/upload/select", "_blank");
+    }
   }
 
   document.getElementById("searchInput").addEventListener("input", () => {
