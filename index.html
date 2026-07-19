@@ -300,10 +300,16 @@ async function fetchAllNativePoints(run) {
   }
 
 function getExistingPointElevationMeters(pt) {
-  if (pt.elevation_m != null) return Number(pt.elevation_m);
-  if (pt.elevation != null) return Number(pt.elevation);
-  if (pt.elevationFt != null) return Number(pt.elevationFt) / 3.28084;
-  if (pt.elevation_ft != null) return Number(pt.elevation_ft) / 3.28084;
+  const candidates = [
+    pt.elevation_m,
+    pt.elevation,
+    pt.elevationFt != null ? Number(pt.elevationFt) / 3.28084 : null,
+    pt.elevation_ft != null ? Number(pt.elevation_ft) / 3.28084 : null
+  ];
+  const elevation = candidates
+    .map(Number)
+    .find(value => Number.isFinite(value) && value !== 0);
+  if (elevation != null) return elevation;
   return null;
 }
 
