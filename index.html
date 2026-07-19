@@ -111,6 +111,40 @@
     });
   }
 
+  function requestProfileSave(run, content, validPoints) {
+    return new Promise((resolve, reject) => {
+      if (!isEmbeddedInLiveStride()) {
+        reject(new Error("Open this page from LiveStride to save a run to your profile."));
+        return;
+      }
+      const requestId = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      const timeoutId = window.setTimeout(() => {
+        window.removeEventListener("message", onMessage);
+        reject(new Error("LiveStride did not confirm the profile save."));
+      }, 30000);
+
+      function onMessage(event) {
+        const data = event.data || {};
+        if (data.source !== "livestride-app" || data.type !== "saveToProfileResult" || data.requestId !== requestId) return;
+        window.clearTimeout(timeoutId);
+        window.removeEventListener("message", onMessage);
+        data.ok ? resolve(data) : reject(new Error(data.message || "LiveStride could not save this run."));
+      }
+
+      window.addEventListener("message", onMessage);
+      window.parent.postMessage({
+        source: "livestride-export",
+        type: "saveToProfile",
+        requestId,
+        run,
+        content,
+        pointCount: validPoints.length,
+        startLat: getPointLat(validPoints[0]),
+        startLon: getPointLon(validPoints[0])
+      }, "*");
+    });
+  }
+
   function downloadGpxInBrowser(filename, content) {
     const blob = new Blob([content], { type: "application/gpx+xml" });
     const url = URL.createObjectURL(blob);
@@ -196,6 +230,7 @@ if (error) {
         <td>${run.finished_at ? run.minutesAgo : "N/A"}</td>
         <td>
           <button onclick="downloadGPXFromSupabase('${safeRun}')">Convert to GPX</button>
+          <button onclick="saveGPXToProfile('${safeRun}')">Save to Profile</button>
           <button onclick="uploadToStrava()">Upload to Strava</button>
         </td>
       `;
@@ -301,7 +336,7 @@ async function fetchElevationMeters(lat, lon) {
     );
   }
 
-  async function downloadGPXFromSupabase(encodedRun) {
+  async function createGPXFromSupabase(encodedRun, destination = "download") {
     const run = JSON.parse(decodeURIComponent(encodedRun));
 
     try {
@@ -384,7 +419,11 @@ gpx += `</gpx>`;
 
       const filename = `${safeName}_${dateStr}.gpx`;
 
-      if (isEmbeddedInLiveStride()) {
+      if (destination === "profile") {
+        setStatus("Saving this run to your LiveStride Profile...");
+        await requestProfileSave(run, gpx, validPoints);
+        setStatus(`Saved ${validPoints.length} points to your LiveStride Profile.`);
+      } else if (isEmbeddedInLiveStride()) {
         setStatus(`Saving ${filename} to Downloads...`);
         await requestAppGpxSave(filename, gpx);
         setStatus(`Saved ${filename} to Downloads with ${validPoints.length} points.`);
@@ -397,6 +436,14 @@ gpx += `</gpx>`;
       alert(err.message || "Failed to create GPX file.");
       setStatus("Failed to create GPX file.");
     }
+  }
+
+  function downloadGPXFromSupabase(encodedRun) {
+    return createGPXFromSupabase(encodedRun, "download");
+  }
+
+  function saveGPXToProfile(encodedRun) {
+    return createGPXFromSupabase(encodedRun, "profile");
   }
 
   function uploadToStrava() {
